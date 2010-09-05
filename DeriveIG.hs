@@ -105,4 +105,3 @@ mkTo :: Pat -> Con -> Clause
 mkTo pat (NormalC cName _) = let ps = SYB.listify ((=="_param") . nameBase) pat
                              in Clause [pat] (NormalB $ foldl AppE (ConE cName) $ map VarE ps) []
 
-data MT = Unit | O MT | I MT deriving (Show, Eq, Ord)
