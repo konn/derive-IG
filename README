@@ -1,0 +1,9 @@
+* Installation
+> cabal configure && cabal build && cabal install
+
+* Usage
+> import Generics.Instant
+> import Generics.Instant.Derive
+> 
+> derive ''Either
+> deriveWith ''() [Just "Unit_Unit"]
