@@ -1,9 +1,12 @@
 {-# LANGUAGE TypeOperators, TypeFamilies, FlexibleContexts, EmptyDataDecls, TemplateHaskell #-}
+module Main where
 import Generics.Instant
 import Data.List
-import DeriveIG
+import Generics.Instant.Derive
 
-deriveIG ''Either
+derive ''Either
+deriveWith ''()   [Just "Unit_Unit"]
+deriveWith ''(,,) [Just "Triple_Triple"]
 
 class Bin a where
     toBin :: a -> [Int]
@@ -58,11 +61,18 @@ instance Bin Char where
   toBin      = take 21 . (++replicate 21 0) . toBits . fromEnum
   fromBin bs = let (ch, bs') = splitAt 21 bs in (toEnum $ fromBits ch, bs')
 
+instance Bin Bool where
+  toBin True  = [1]
+  toBin False = [0]
+  fromBin (1:xs) = (True, xs)
+  fromBin (0:xs) = (False, xs)
+
+instance Bin () where { toBin = def_toBin; fromBin = def_fromBin }
 instance Bin a => Bin [a] where { toBin = def_toBin; fromBin = def_fromBin }
-instance Bin Bool where { toBin = def_toBin; fromBin = def_fromBin }
 instance Bin a => Bin (Maybe a) where { toBin = def_toBin; fromBin = def_fromBin }
 instance (Bin a, Bin b) => Bin (Either a b) where { toBin = def_toBin; fromBin = def_fromBin }
 instance (Bin a, Bin b) => Bin (a, b) where { toBin = def_toBin; fromBin = def_fromBin }
+instance (Bin a, Bin b, Bin c) => Bin (a, b, c) where { toBin = def_toBin; fromBin = def_fromBin }
 
 unfoldrStep :: (b -> Bool) -> (b -> a) -> (b -> b) -> b -> Maybe (a, b)
 unfoldrStep p f g x | p x       = Nothing
@@ -74,5 +84,3 @@ bitCount = ceiling $ logBase 2 $ fromIntegral (maxBound::Int)
 toBits   = unfoldr (unfoldrStep (==0) (`mod`2) (`div`2))
 fromBits = foldr (\a b -> a+2*b) 0
 
-deriveIG ''Wrap
-instance Bin a => Bin (Wrap a) where toBin = def_toBin; fromBin = def_fromBin

@@ -1,13 +1,12 @@
 {-# OPTIONS_GHC -fwarn-unused-imports #-}
-{-# LANGUAGE TemplateHaskell, PatternGuards, ScopedTypeVariables, ViewPatterns, FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell, ScopedTypeVariables, ViewPatterns, FlexibleContexts #-}
 module Generics.Instant.Derive 
-    ( derive, deriveCon, deriveConWith, deriveRep, deriveRepWith, deriveWith) where
+    (derive, derives, deriveWith, deriveCon, deriveConWith, deriveRep, deriveRepWith) where
 import Generics.Instant
-import Language.Haskell.TH
-import Language.Haskell.TH.Lift
+import Language.Haskell.TH 
+import Language.Haskell.TH.Syntax (lift)
 import Control.Monad
-import Data.Char
-import qualified Data.Generics as SYB
+import Data.Char (isLower)
 
 normalizeDec :: Dec -> Dec
 normalizeDec dec@(DataD _ _ _ _ _)         = dec
@@ -18,11 +17,13 @@ normalizeCon con@(NormalC _ _)     = con
 normalizeCon (RecC name vsts)      = NormalC name $ map (\(n,s,t) -> (s,t)) vsts
 normalizeCon (InfixC st1 name st2) = NormalC name [st1, st2]
 
-derives :: [Name] -> Q [Dec]
-derives = liftM concat . mapM derive
-
+-- |Generate Constructor and Representable instance for 
 derive :: Name -> Q [Dec]
 derive typName = deriveWith typName []
+
+-- | 
+derives :: [Name] -> Q [Dec]
+derives = liftM concat . mapM derive
 
 deriveWith :: Name -> [Maybe String] -> Q [Dec]
 deriveWith typName conNames = do
@@ -56,8 +57,8 @@ deriveRepWith name conNames = do
                 | otherwise = return $ foldr1 (op ''(:*:)) . map (varOrRec . snd) $ sts
     appT (appT (conT ''C) (conT nm)) repType
   tySyn <- tySynInstD ''Rep [return inst] $ return $ foldr1 (op ''(:+:)) reps
-  exps <- buildQ (foldr1 (op ''(:+:)) reps) :: Q [Exp]
-  pats <- buildQ (foldr1 (op ''(:+:)) reps) :: Q [Pat]
+  exps <- buildQ (foldr1 (op ''(:+:)) reps) :: Q [([Name], Exp)]
+  pats <- buildQ (foldr1 (op ''(:+:)) reps) :: Q [([Name], Pat)]
   let from = funD (mkName "from") $ zipWith mkFrom cons exps
       to   = funD (mkName "to") $ zipWith mkTo pats cons
   dec <- instanceD (return cxt) (appT (conT ''Representable) (return inst)) [return tySyn, from, to]
@@ -110,19 +111,6 @@ replace from to = map step
 op :: Name -> Type -> Type -> Type
 op name = AppT . AppT (ConT name)
 
-buildRep :: Name -> Type -> Con -> [Dec]
-buildRep typName inst (NormalC name sts) = [conDataDec, conInstDec, typInsDec]
-  where conDataName = mkName $ replace '.' '_' (show typName) ++ "_" ++ nameBase name
-        conDataDec  = DataD [] conDataName [] [] []
-        cnstrType   = AppT (ConT ''C) (ConT conDataName)
-        conInstDec  = InstanceD [] (AppT (ConT ''Constructor) (ConT conDataName)) 
-                        [FunD 'conName [Clause [WildP] (NormalB (LitE $ StringL $ show name)) []] ]
-        repType | null sts  = AppT cnstrType (ConT ''U)
-                | otherwise = AppT cnstrType . foldr1 (op ''(:*:)) . map (varOrRec . snd) $ sts
-        typInsDec  = TySynInstD ''Rep undefined repType
-        varOrRec n | n == inst = AppT (ConT ''Rec) n
-                   | otherwise = AppT (ConT ''Var) n
-
 class Tree a where
     con :: Name -> [a] -> a
     var :: Name -> a
@@ -135,34 +123,34 @@ instance Tree Pat where
     con = ConP
     var = VarP
 
-buildQ :: Tree a => Type -> Q [a]
-buildQ (AppT (AppT (ConT c) _) ty) | c == ''C = do {bs <- buildQ ty; return [con 'C bs]}
+buildQ :: Tree a => Type -> Q [([Name], a)]
+buildQ (AppT (AppT (ConT c) _) ty) | c == ''C = do {(nms,bs):_ <- buildQ ty; return [(nms, con 'C [bs])]}
 buildQ (AppT (AppT (ConT c) a) b)
     | c == ''(:+:) = do
-       l  <- buildQ a
-       rs <- liftM (map (con 'R . return)) $ (buildQ b)
-       return (con 'L l:rs)
+       (lname,l):_  <- buildQ a
+       rs <- buildQ b
+       return ((lname, con 'L [l]):map (\(n, exp) -> (n, con 'R [exp])) rs)
     | c == ''(:*:) = do
        ls <- buildQ a
        rs <- buildQ b
-       return [con '(:*:) (ls ++ rs)]
-buildQ (AppT (ConT c) a) | c == ''Var = liftM ((:[]) . con 'Var . take 1) $ buildQ a
-                         | c == ''Rec = liftM ((:[]) . con 'Rec . take 1) $ buildQ a
-buildQ (ConT name) | name == ''U = return [con 'U []]
+       return [(concatMap fst ls ++ concatMap fst rs, con '(:*:) (map snd ls ++ map snd rs))]
+buildQ (AppT (ConT c) a)
+    | c == ''Var = do
+        ((nms, l):_) <- buildQ a
+        return [(nms, con 'Var [l])] 
+    | c == ''Rec = do
+        ((nms, r):_) <-buildQ a
+        return [(nms, con 'Rec [r])]
+buildQ (ConT name) | name == ''U = return [([], con 'U [])]
 buildQ v = do
   name <- newName "_param"
-  return [var name]
+  return [([name], var name)]
 
-type2Name (ConT nm) = nm
-type2Name (VarT nm) = nm
+mkFrom :: Con -> ([Name], Exp) -> ClauseQ
+mkFrom (normalizeCon -> NormalC cName _) (names, exp) =
+    clause [conP cName (map varP names)] (normalB $ return exp) []
 
-mkFrom :: Con -> Exp -> ClauseQ
-mkFrom (normalizeCon -> NormalC cName _) exp =
-    let ps = SYB.listify ((=="_param") . nameBase) exp
-    in clause [conP cName (map varP ps)] (normalB $ return exp) []
-
-mkTo :: Pat -> Con -> ClauseQ
-mkTo pat (normalizeCon -> NormalC cName _) = 
-    let ps = SYB.listify ((=="_param") . nameBase) pat
-    in clause [return pat] (normalB $ appsE (conE cName:map varE ps)) []
+mkTo :: ([Name], Pat) -> Con -> ClauseQ
+mkTo (names, pat) (normalizeCon -> NormalC cName _) = 
+    clause [return pat] (normalB $ appsE (conE cName:map varE names)) []
 

@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell, EmptyDataDecls, FlexibleContexts, OverlappingInstances #-}
 {-# LANGUAGE FlexibleInstances ,TypeSynonymInstances, TypeFamilies, TypeOperators #-}
+module Main where
 import Generics.Instant
 import Language.Haskell.TH
 import Generics.Instant.Derive
